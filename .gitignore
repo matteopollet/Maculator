@@ -1,0 +1,10 @@
+# Build artifacts
+*.exe
+*.o
+*.dSYM/
+build/
+calc_test
+tools/percent_probe
+
+# OS noise
+.DS_Store

@@ -11,6 +11,12 @@ Windows 10/11 — and, as shown below, under Wine.
 |:---:|:---:|
 | ![Original Calculator showing 5 ÷ 0 → Undefined](docs/screenshots/original-undefined.png) | ![Maculator showing 5 ÷ 0 → Undefined](docs/screenshots/clone-undefined.png) |
 
+## Download
+
+Grab the prebuilt `Calculator.exe` (28 KB, no installer needed) from
+[Releases](https://github.com/matteopollet/maculator/releases/latest) — or
+build it yourself in one command (see [Build](#build)).
+
 ## Highlights
 
 - **28 KB** single `Calculator.exe` — PE32+, x86-64, GUI subsystem

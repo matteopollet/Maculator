@@ -116,7 +116,14 @@ static int    g_has_repeat;     // repeat info valid
 static char   g_expr_text[512]; // rendered expression line
 static char   g_res_text[64];   // rendered result line
 static int    g_hover = -1;     // hovered button id
-static int    g_press = -1;     // pressed button id
+static int    g_press = -1;     // pressed button id (20/21 = toolbar icons)
+static int    g_sidebar;        // history sidebar open
+static int    g_menu_open;      // mode menu open
+#define SB_W    118
+#define HIST_MAX 16
+static char   g_hist[HIST_MAX][2][128]; // [i] = {expr, result}, newest first
+static int    g_hist_n;
+static int win_w(void) { return WIN_W + (g_sidebar ? SB_W : 0); }
 static HWND   g_hwnd;
 static HFONT  g_fntBtn, g_fntExpr, g_fntRes;
 static int    g_expr_ellipsis;  // result truncated with …
@@ -526,7 +533,14 @@ evalnow:;
     int tr; rat_str(r, 1, g_res_text, sizeof(g_res_text), &tr);
     g_expr_ellipsis = tr;
     g_shown_result = 1;
-    render_expr(); InvalidateRect(g_hwnd, NULL, FALSE);
+    render_expr();
+    // history: newest first; oldest (last index) dropped when full
+    if (g_hist_n == HIST_MAX) g_hist_n--;
+    memmove(g_hist[1], g_hist[0], sizeof(g_hist[0]) * g_hist_n);
+    strncpy(g_hist[0][0], g_expr_text, 127); g_hist[0][0][127] = 0;
+    strncpy(g_hist[0][1], g_res_text, 127);  g_hist[0][1][127] = 0;
+    g_hist_n++;
+    InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
 // ---------- input ----------
@@ -579,7 +593,7 @@ static void make_fonts(void) {
 }
 
 static void set_rgn(HWND h) {
-    SetWindowRgn(h, CreateRoundRectRgn(0, 0, S(WIN_W) + 1, S(WIN_H) + 1, S(20), S(20)), TRUE);
+    SetWindowRgn(h, CreateRoundRectRgn(0, 0, S(win_w()) + 1, S(WIN_H) + 1, S(20), S(20)), TRUE);
 }
 
 // vector-drawn button glyphs — no font dependency (⌫ and ⁺/₋ are missing
@@ -647,27 +661,59 @@ static void rim_dib(uint32_t *px, int rw, int rh, int cx, int cy, int rad,
     }
 }
 
+// radial darkening for the traffic-light discs: the real dots have a bright
+// center falling off toward a slightly darker outline (measured on capture)
+static void shade_disc(uint32_t *px, int rw, int rh, int cx, int cy, int rad) {
+    for (int y = cy - rad; y <= cy + rad; y++) {
+        if (y < 0 || y >= rh) continue;
+        for (int x = cx - rad; x <= cx + rad; x++) {
+            if (x < 0 || x >= rw) continue;
+            double dx = x - cx + 0.5, dy = y - cy + 0.5;
+            double d = sqrt(dx * dx + dy * dy);
+            if (d > rad) continue;
+            double k = 0.10 + 0.26 * pow(d / rad, 3.0);   // darker toward edge
+            uint32_t p = px[y * rw + x];
+            int b_ = (int)((p & 0xFF) * (1 - k));
+            int g_ = (int)(((p >> 8) & 0xFF) * (1 - k));
+            int r_ = (int)(((p >> 16) & 0xFF) * (1 - k));
+            px[y * rw + x] = (p & 0xFF000000) | (r_ << 16) | (g_ << 8) | b_;
+        }
+    }
+}
+
 // toolbar icons, top-right: sidebar toggle + converter, dark discs + light glyph
 static void draw_toolbar_icon(HDC m, int which, int cx, int cy) {
     COLORREF face = RGB(53, 51, 51), glyph = RGB(218, 217, 217);
+    int infl = 0;
+    if (g_press == 20 + which) { face = lighten(face, 25); infl = R(1); }
     HBRUSH b = CreateSolidBrush(face);
     HBRUSH ob = (HBRUSH)SelectObject(m, b);
     HPEN np = (HPEN)SelectObject(m, GetStockObject(NULL_PEN));
-    Ellipse(m, cx - R(11), cy - R(11), cx + R(11), cy + R(11));
+    Ellipse(m, cx - R(11) - infl, cy - R(11) - infl, cx + R(11) + infl, cy + R(11) + infl);
     SelectObject(m, ob); SelectObject(m, np); DeleteObject(b);
 
     HPEN p = CreatePen(PS_SOLID, R(1) ? R(1) : 1, glyph);
     HPEN op = (HPEN)SelectObject(m, p);
     HBRUSH nb = (HBRUSH)SelectObject(m, GetStockObject(NULL_BRUSH));
-    if (which == 0) { // sidebar: rounded square, narrow left pane + wide right
+    if (which == 0) { // sidebar: rounded square, narrow left pane, 3 list lines
         RoundRect(m, cx - R(6), cy - R(5), cx + R(6), cy + R(5), R(3), R(3));
         MoveToEx(m, cx - R(2), cy - R(5), NULL); LineTo(m, cx - R(2), cy + R(5));
-    } else {          // calculator: rounded square, display band + 3x3 pad
+        for (int i = 0; i < 3; i++) {
+            MoveToEx(m, cx - R(5), cy + R(-2 + i * 2), NULL);
+            LineTo(m,   cx - R(3) + 1, cy + R(-2 + i * 2));
+        }
+    } else {          // calculator: outline body, filled display band, 3x3 dots
         RoundRect(m, cx - R(4), cy - R(6), cx + R(4), cy + R(6), R(2), R(2));
-        MoveToEx(m, cx - R(4), cy - R(3), NULL); LineTo(m, cx + R(4), cy - R(3));
+        HBRUSH gb = CreateSolidBrush(glyph);
+        HBRUSH og = (HBRUSH)SelectObject(m, gb);
+        HPEN npp = (HPEN)SelectObject(m, GetStockObject(NULL_PEN));
+        RECT band = { cx - R(4) + R(1), cy - R(6) + R(1), cx + R(4), cy - R(3) };
+        FillRect(m, &band, gb);
         for (int r = 0; r < 3; r++)
             for (int c = 0; c < 3; c++)
-                SetPixel(m, cx + R(-2 + c * 2), cy + R(0 + r * 2), glyph);
+                Ellipse(m, cx + R(-3 + c * 3) - 1, cy + R(-1 + r * 3) - 1,
+                           cx + R(-3 + c * 3) + 1, cy + R(-1 + r * 3) + 1);
+        SelectObject(m, og); SelectObject(m, npp); DeleteObject(gb);
     }
     SelectObject(m, nb); SelectObject(m, op); DeleteObject(p);
 }
@@ -675,9 +721,9 @@ static void draw_toolbar_icon(HDC m, int which, int cx, int cy) {
 static void draw_all(HDC hdc, RECT rc) {
     (void)rc;
     g_rsc = g_s * SS;
-    int dw = S(WIN_W), dh = S(WIN_H);      // window (device px)
+    int dw = S(win_w()), dh = S(WIN_H);    // window (device px)
     int rw = dw * SS, rh = dh * SS;        // render buffer, exact multiple
-    g_rsc = rw / (float)WIN_W;             // absorb rounding in the draw scale
+    g_rsc = rw / (float)win_w();           // absorb rounding in the draw scale
 
     // 32bpp top-down DIBs so we can read back pixels for the AA downsample
     BITMAPINFO bi = { { 40, 0, 0, 1, 32, 0, 0, 0, 0, 0, 0 } };
@@ -702,9 +748,12 @@ static void draw_all(HDC hdc, RECT rc) {
         HPEN p = (HPEN)SelectObject(m, GetStockObject(NULL_PEN));
         Ellipse(m, R(12 + i * 20), R(10), R(12 + i * 20 + 12), R(22));
         SelectObject(m, ob); SelectObject(m, p); DeleteObject(b);
+        shade_disc(rbits, rw, rh, R(12 + i * 20 + 6), R(16), R(6));
     }
     draw_toolbar_icon(m, 0, R(115), R(17));
     draw_toolbar_icon(m, 1, R(205), R(17));
+    rim_dib(rbits, rw, rh, R(115), R(17), R(11), 0);
+    rim_dib(rbits, rw, rh, R(205), R(17), R(11), 0);
 
     // display text (right aligned)
     SetBkMode(m, TRANSPARENT);
@@ -761,6 +810,64 @@ static void draw_all(HDC hdc, RECT rc) {
         }
     }
 
+    // history sidebar — slides in on the right like the real app
+    if (g_sidebar) {
+        HBRUSH hb = CreateSolidBrush(RGB(30, 29, 29));
+        RECT sr = { R(WIN_W), 0, rw, rh };
+        FillRect(m, &sr, hb); DeleteObject(hb);
+        HPEN sp = CreatePen(PS_SOLID, R(1) > 0 ? R(1) : 1, RGB(58, 56, 56));
+        HPEN osp = (HPEN)SelectObject(m, sp);
+        MoveToEx(m, R(WIN_W), 0, NULL); LineTo(m, R(WIN_W), rh);
+        SelectObject(m, osp); DeleteObject(sp);
+        SetTextColor(m, C_EXPR); SelectObject(m, g_fntExpr);
+        WCHAR wl[64]; MultiByteToWideChar(CP_UTF8, 0, "History", -1, wl, 64);
+        RECT hr = { R(WIN_W + 10), R(8), R(win_w() - 10), R(34) };
+        DrawTextW(m, wl, -1, &hr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        for (int i = 0; i < g_hist_n; i++) {
+            int y = 44 + i * 40;
+            if (y + 34 > WIN_H - 8) break;
+            WCHAR we[128], wr[128];
+            MultiByteToWideChar(CP_UTF8, 0, g_hist[i][0], -1, we, 128);
+            MultiByteToWideChar(CP_UTF8, 0, g_hist[i][1], -1, wr, 128);
+            SetTextColor(m, C_EXPR); SelectObject(m, g_fntExpr);
+            RECT er = { R(WIN_W + 10), R(y), R(win_w() - 10), R(y + 18) };
+            DrawTextW(m, we, -1, &er, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            SetTextColor(m, C_RESULT); SelectObject(m, g_fntRes);
+            RECT rr2 = { R(WIN_W + 10), R(y + 16), R(win_w() - 10), R(y + 36) };
+            DrawTextW(m, wr, -1, &rr2, DT_RIGHT | DT_BOTTOM | DT_SINGLELINE);
+        }
+        if (!g_hist_n) {
+            SetTextColor(m, RGB(110, 108, 108)); SelectObject(m, g_fntExpr);
+            RECT er = { R(WIN_W + 10), R(180), R(win_w() - 10), R(230) };
+            DrawTextW(m, L"No history", -1, &er, DT_CENTER | DT_VCENTER);
+        }
+    }
+
+    // mode menu under the calculator toolbar icon (Basic only for now)
+    if (g_menu_open) {
+        static const WCHAR *mi[4] = { L"Basic", L"Scientific", L"Programmer", L"Convert" };
+        RECT mr = { R(118), R(30), R(226), R(30 + 4 * 22 + 8) };
+        HBRUSH mb = CreateSolidBrush(RGB(46, 44, 44));
+        FillRect(m, &mr, mb); DeleteObject(mb);
+        HPEN mp = CreatePen(PS_SOLID, R(1) > 0 ? R(1) : 1, RGB(72, 70, 70));
+        HPEN omp = (HPEN)SelectObject(m, mp);
+        HBRUSH nbb = (HBRUSH)SelectObject(m, GetStockObject(NULL_BRUSH));
+        Rectangle(m, mr.left, mr.top, mr.right, mr.bottom);
+        SelectObject(m, omp); SelectObject(m, nbb); DeleteObject(mp);
+        SelectObject(m, g_fntExpr);
+        for (int i = 0; i < 4; i++) {
+            RECT ir = { mr.left + R(10), R(34 + i * 22), mr.right - R(6), R(34 + i * 22 + 20) };
+            if (i == 0) {
+                SetTextColor(m, C_RESULT);
+                WCHAR t[32]; wsprintfW(t, L"\x2713 %s", mi[i]);
+                DrawTextW(m, t, -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            } else {
+                SetTextColor(m, RGB(110, 108, 108));  // not implemented yet
+                DrawTextW(m, mi[i], -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+        }
+    }
+
     // box-filter downsample ×SS — deterministic AA on every platform
     uint32_t *sp = rbits, *dp = dbits;
     for (int y = 0; y < dh; y++) {
@@ -793,6 +900,42 @@ static int btn_at(int mx, int my) {
     return -1;
 }
 
+// toolbar icons: 0 = sidebar (115,17), 1 = mode menu (205,17), r~11
+static int tb_at(int x, int y) {
+    const int cxs[2] = { 115, 205 };
+    for (int i = 0; i < 2; i++) {
+        int dx = x - S(cxs[i]), dy = y - S(17);
+        if (dx * dx + dy * dy <= S(11) * S(11)) return i;
+    }
+    return -1;
+}
+
+// open mode menu rows (design px): x 118..226, rows y 34..122, h 22
+static int menu_at(int x, int y) {
+    if (!g_menu_open || x < S(118) || x > S(226)) return -1;
+    int ry = y - S(34);
+    if (ry < 0 || ry >= S(88)) return -1;
+    return ry / S(22);
+}
+
+// traffic-light circles also live in the drag strip: give them HTCLIENT
+static int in_title_controls(int x, int y) {
+    for (int i = 0; i < 3; i++) {
+        int dx = x - S(18 + i * 20), dy = y - S(16);
+        if (dx * dx + dy * dy <= S(8) * S(8)) return 1;
+    }
+    return tb_at(x, y) >= 0;
+}
+
+static void toggle_sidebar(HWND h) {
+    g_sidebar ^= 1;
+    RECT wr; GetWindowRect(h, &wr);
+    SetWindowPos(h, NULL, wr.left, wr.top, S(win_w()), S(WIN_H),
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    set_rgn(h);
+    InvalidateRect(h, NULL, FALSE);
+}
+
 static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
         case WM_CREATE:
@@ -811,12 +954,23 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             if (b != g_hover) { g_hover = b; InvalidateRect(h, NULL, FALSE); }
             return 0;
         }
-        case WM_LBUTTONDOWN:
-            g_press = btn_at(GET_X_LPARAM(l), GET_Y_LPARAM(l));
+        case WM_LBUTTONDOWN: {
+            int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
+            int tb = tb_at(x, y);
+            if (tb >= 0) { g_press = 20 + tb; SetCapture(h); InvalidateRect(h, NULL, FALSE); return 0; }
+            g_press = btn_at(x, y);
             if (g_press >= 0) { SetCapture(h); InvalidateRect(h, NULL, FALSE); }
             return 0;
+        }
         case WM_LBUTTONUP: {
             int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
+            if (g_menu_open) {
+                int mi = menu_at(x, y);
+                g_menu_open = 0; g_press = -1; ReleaseCapture();
+                InvalidateRect(h, NULL, FALSE);
+                if (mi >= 0) return 0;   // only "Basic" exists — nothing to switch
+                return 0;                // swallow the dismiss click
+            }
             // traffic lights: close / minimize / (zoom ignored)
             for (int i = 0; i < 3; i++) {
                 int dx = x - S(18 + i * 20), dy = y - S(16);
@@ -826,14 +980,22 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
                     return 0;
                 }
             }
+            int tb = tb_at(x, y);
+            if (g_press >= 20 && tb == g_press - 20) {
+                g_press = -1; ReleaseCapture();
+                if (tb == 0) toggle_sidebar(h);
+                else { g_menu_open = 1; InvalidateRect(h, NULL, FALSE); }
+                return 0;
+            }
             int b = btn_at(x, y);
-            if (g_press >= 0 && b == g_press) on_btn_real(g_btns[b].id);
+            if (g_press >= 0 && g_press < 20 && b == g_press) on_btn_real(g_btns[b].id);
             g_press = -1; ReleaseCapture(); InvalidateRect(h, NULL, FALSE);
             return 0;
         }
         case WM_NCHITTEST: {
             POINT pt = { GET_X_LPARAM(l), GET_Y_LPARAM(l) };
             ScreenToClient(h, &pt);
+            if (in_title_controls(pt.x, pt.y)) return HTCLIENT;
             if (pt.y < S(30)) return HTCAPTION;      // drag by title bar
             return HTCLIENT;
         }

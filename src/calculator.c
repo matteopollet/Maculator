@@ -1,5 +1,8 @@
 // Windows clone of macOS Calculator 12.0 (Basic mode) — pure Win32, no deps.
 // Spec extracted from /System/Applications/Calculator.app via REA.
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00   // Win10: DPI awareness APIs
+#endif
 #ifdef CALC_TEST
 #include "calc_stub.h"
 #else
@@ -114,7 +117,7 @@ static char   g_res_text[64];   // rendered result line
 static int    g_hover = -1;     // hovered button id
 static int    g_press = -1;     // pressed button id
 static HWND   g_hwnd;
-static HFONT  g_fntBtn, g_fntExpr, g_fntRes, g_fntIcon;
+static HFONT  g_fntBtn, g_fntExpr, g_fntRes;
 static int    g_expr_ellipsis;  // result truncated with …
 static int    g_error;          // display "Undefined"
 
@@ -552,35 +555,72 @@ static void on_btn_real(int id) {
 
 // ---------- drawing ----------
 #ifndef CALC_TEST
+// All spec numbers are in "design px" (the measured macOS window, 230×408).
+// g_s maps them to real pixels for the monitor DPI; rendering additionally
+// happens at g_s*SS then StretchBlt down — cheap antialiasing, since GDI
+// never AA's its primitives.
+#define SS 4
+static float g_s = 1.0f, g_rsc = SS;
+static int S(int v) { return (int)(v * g_s + 0.5f); }
+#define R(v) ((int)((v) * g_rsc + 0.5f))
+
+static void make_fonts(void) {
+    g_rsc = g_s * SS;
+    if (g_fntBtn) { DeleteObject(g_fntBtn); DeleteObject(g_fntExpr); DeleteObject(g_fntRes); }
+    g_fntBtn  = CreateFontW(-R(20), 0, 0, 0, FW_REGULAR, 0, 0, 0, DEFAULT_CHARSET,
+                            0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    g_fntExpr = CreateFontW(-R(22), 0, 0, 0, FW_REGULAR, 0, 0, 0, DEFAULT_CHARSET,
+                            0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    g_fntRes  = CreateFontW(-R(31), 0, 0, 0, FW_LIGHT, 0, 0, 0, DEFAULT_CHARSET,
+                            0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI Light");
+}
+
+static void set_rgn(HWND h) {
+    SetWindowRgn(h, CreateRoundRectRgn(0, 0, S(WIN_W) + 1, S(WIN_H) + 1, S(20), S(20)), TRUE);
+}
+
 // vector-drawn button glyphs — no font dependency (⌫ and ⁺/₋ are missing
 // from many fallback fonts)
 static void draw_icon(HDC m, int id, int cx, int cy) {
-    HPEN p = CreatePen(PS_SOLID, 2, C_GLYPH);
+    HPEN p = CreatePen(PS_SOLID, R(2), C_GLYPH);
     HPEN op = (HPEN)SelectObject(m, p);
     if (id == F_BS) {
-        POINT tag[6] = { {cx-11,cy}, {cx-4,cy-7}, {cx+11,cy-7},
-                         {cx+11,cy+7}, {cx-4,cy+7}, {cx-11,cy} };
+        POINT tag[6] = { {cx+R(-11),cy}, {cx+R(-4),cy+R(-7)}, {cx+R(11),cy+R(-7)},
+                         {cx+R(11),cy+R(7)}, {cx+R(-4),cy+R(7)}, {cx+R(-11),cy} };
         HBRUSH ob = (HBRUSH)SelectObject(m, GetStockObject(NULL_BRUSH));
         Polygon(m, tag, 6);
         SelectObject(m, ob);
-        MoveToEx(m, cx+1, cy-3, NULL); LineTo(m, cx+7, cy+3);
-        MoveToEx(m, cx+7, cy-3, NULL); LineTo(m, cx+1, cy+3);
+        MoveToEx(m, cx+R(1), cy+R(-3), NULL); LineTo(m, cx+R(7), cy+R(3));
+        MoveToEx(m, cx+R(7), cy+R(-3), NULL); LineTo(m, cx+R(1), cy+R(3));
     } else { // F_PM: "+/−" drawn inline
-        MoveToEx(m, cx-12, cy, NULL); LineTo(m, cx-6, cy);
-        MoveToEx(m, cx-9, cy-3, NULL); LineTo(m, cx-9, cy+3);
-        MoveToEx(m, cx-2, cy+5, NULL); LineTo(m, cx+2, cy-5);
-        MoveToEx(m, cx+5, cy, NULL);  LineTo(m, cx+11, cy);
+        MoveToEx(m, cx+R(-12), cy, NULL); LineTo(m, cx+R(-6), cy);
+        MoveToEx(m, cx+R(-9), cy+R(-3), NULL); LineTo(m, cx+R(-9), cy+R(3));
+        MoveToEx(m, cx+R(-2), cy+R(5), NULL); LineTo(m, cx+R(2), cy+R(-5));
+        MoveToEx(m, cx+R(5), cy, NULL);  LineTo(m, cx+R(11), cy);
     }
     SelectObject(m, op); DeleteObject(p);
 }
 
 static void draw_all(HDC hdc, RECT rc) {
     (void)rc;
+    g_rsc = g_s * SS;
+    int dw = S(WIN_W), dh = S(WIN_H);      // window (device px)
+    int rw = dw * SS, rh = dh * SS;        // render buffer, exact multiple
+    g_rsc = rw / (float)WIN_W;             // absorb rounding in the draw scale
+
+    // 32bpp top-down DIBs so we can read back pixels for the AA downsample
+    BITMAPINFO bi = { { 40, 0, 0, 1, 32, 0, 0, 0, 0, 0, 0 } };
+    void *rbits, *dbits;
+    bi.bmiHeader.biWidth = rw; bi.bmiHeader.biHeight = -rh;
     HDC m = CreateCompatibleDC(hdc);
-    HBITMAP bmp = CreateCompatibleBitmap(hdc, WIN_W, WIN_H);
-    HBITMAP old = (HBITMAP)SelectObject(m, bmp);
+    HBITMAP dib1 = CreateDIBSection(m, &bi, DIB_RGB_COLORS, &rbits, NULL, 0);
+    HBITMAP old = (HBITMAP)SelectObject(m, dib1);
+    HDC m2 = CreateCompatibleDC(hdc);
+    bi.bmiHeader.biWidth = dw; bi.bmiHeader.biHeight = -dh;
+    HBITMAP dib2 = CreateDIBSection(m2, &bi, DIB_RGB_COLORS, &dbits, NULL, 0);
+    HBITMAP old2 = (HBITMAP)SelectObject(m2, dib2);
     HBRUSH bg = CreateSolidBrush(C_BG);
-    RECT all = { 0, 0, WIN_W, WIN_H };
+    RECT all = { 0, 0, rw, rh };
     FillRect(m, &all, bg); DeleteObject(bg);
 
     // traffic lights
@@ -589,20 +629,20 @@ static void draw_all(HDC hdc, RECT rc) {
         HBRUSH b = CreateSolidBrush(tl[i]);
         HBRUSH ob = (HBRUSH)SelectObject(m, b);
         HPEN p = (HPEN)SelectObject(m, GetStockObject(NULL_PEN));
-        Ellipse(m, 12 + i * 20, 10, 12 + i * 20 + 12, 22);
+        Ellipse(m, R(12 + i * 20), R(10), R(12 + i * 20 + 12), R(22));
         SelectObject(m, ob); SelectObject(m, p); DeleteObject(b);
     }
 
     // display text (right aligned)
     SetBkMode(m, TRANSPARENT);
-    RECT dr = { 10, 56, 220, 90 };
+    RECT dr = { R(10), R(56), R(220), R(90) };
     SetTextColor(m, C_EXPR);
     SelectObject(m, g_fntExpr);
     WCHAR wbuf[512];
     MultiByteToWideChar(CP_UTF8, 0, g_expr_text, -1, wbuf, 512);
     DrawTextW(m, wbuf, -1, &dr, DT_RIGHT | DT_BOTTOM | DT_SINGLELINE);
 
-    RECT rr = { 10, 90, 220, 130 };
+    RECT rr = { R(10), R(90), R(220), R(130) };
     SetTextColor(m, C_RESULT);
     SelectObject(m, g_fntRes);
     if (g_error) {
@@ -631,25 +671,43 @@ static void draw_all(HDC hdc, RECT rc) {
         HBRUSH b = CreateSolidBrush(c);
         HBRUSH ob = (HBRUSH)SelectObject(m, b);
         HPEN p = (HPEN)SelectObject(m, GetStockObject(NULL_PEN));
-        Ellipse(m, x, y, x + BTN_D, y + BTN_D);
+        Ellipse(m, R(x), R(y), R(x + BTN_D), R(y + BTN_D));
         SelectObject(m, ob); SelectObject(m, p); DeleteObject(b);
-        RECT tr = { x, y, x + BTN_D, y + BTN_D };
+        RECT tr = { R(x), R(y), R(x + BTN_D), R(y + BTN_D) };
         if (g_btns[i].id == F_BS || g_btns[i].id == F_PM)
-            draw_icon(m, g_btns[i].id, x + BTN_D / 2, y + BTN_D / 2);
+            draw_icon(m, g_btns[i].id, R(x + BTN_D / 2), R(y + BTN_D / 2));
         else
             DrawTextW(m, g_btns[i].label, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    BitBlt(hdc, 0, 0, WIN_W, WIN_H, m, 0, 0, SRCCOPY);
-    SelectObject(m, old); DeleteObject(bmp); DeleteDC(m);
+    // box-filter downsample ×SS — deterministic AA on every platform
+    uint32_t *sp = rbits, *dp = dbits;
+    for (int y = 0; y < dh; y++) {
+        for (int x = 0; x < dw; x++) {
+            unsigned r = 0, g = 0, b = 0;
+            const uint32_t *blk = sp + (size_t)y * SS * rw + x * SS;
+            for (int j = 0; j < SS; j++)
+                for (int i = 0; i < SS; i++) {
+                    uint32_t p = blk[j * rw + i];
+                    r += (p >> 16) & 255; g += (p >> 8) & 255; b += p & 255;
+                }
+            dp[y * dw + x] = 0xFF000000 | ((r / (SS * SS)) << 16) |
+                             ((g / (SS * SS)) << 8) | (b / (SS * SS));
+        }
+    }
+    BitBlt(hdc, 0, 0, dw, dh, m2, 0, 0, SRCCOPY);
+
+    SelectObject(m, old); SelectObject(m2, old2);
+    DeleteObject(dib1); DeleteObject(dib2);
+    DeleteDC(m); DeleteDC(m2);
 }
 
 static int btn_at(int mx, int my) {
     for (int i = 0; i < 20; i++) {
         int row = i / 4, col = i % 4;
-        int cx = GRID_X0 + col * GRID_P + BTN_D / 2, cy = GRID_Y0 + row * GRID_P + BTN_D / 2;
+        int cx = S(GRID_X0 + col * GRID_P + BTN_D / 2), cy = S(GRID_Y0 + row * GRID_P + BTN_D / 2);
         int dx = mx - cx, dy = my - cy;
-        if (dx * dx + dy * dy <= 24 * 24) return i;
+        if (dx * dx + dy * dy <= S(24) * S(24)) return i;
     }
     return -1;
 }
@@ -658,12 +716,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
         case WM_CREATE:
             g_hwnd = h;
-            g_fntBtn = CreateFontW(-20, 0, 0, 0, FW_REGULAR, 0, 0, 0, DEFAULT_CHARSET,
-                                   0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-            g_fntExpr = CreateFontW(-22, 0, 0, 0, FW_REGULAR, 0, 0, 0, DEFAULT_CHARSET,
-                                    0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-            g_fntRes = CreateFontW(-31, 0, 0, 0, FW_LIGHT, 0, 0, 0, DEFAULT_CHARSET,
-                                   0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI Light");
+            make_fonts();
             clear_all();
             return 0;
         case WM_ERASEBKGND: return 1;
@@ -685,8 +738,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
             // traffic lights: close / minimize / (zoom ignored)
             for (int i = 0; i < 3; i++) {
-                int dx = x - (18 + i * 20), dy = y - 16;
-                if (dx * dx + dy * dy <= 64) {
+                int dx = x - S(18 + i * 20), dy = y - S(16);
+                if (dx * dx + dy * dy <= S(8) * S(8)) {
                     if (i == 0) { PostMessage(h, WM_CLOSE, 0, 0); }
                     else if (i == 1) { ShowWindow(h, SW_MINIMIZE); }
                     return 0;
@@ -700,7 +753,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         case WM_NCHITTEST: {
             POINT pt = { GET_X_LPARAM(l), GET_Y_LPARAM(l) };
             ScreenToClient(h, &pt);
-            if (pt.y < 30) return HTCAPTION;      // drag by title bar
+            if (pt.y < S(30)) return HTCAPTION;      // drag by title bar
             return HTCLIENT;
         }
         case WM_CHAR: {
@@ -730,6 +783,17 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             else if (w == VK_SUBTRACT) press_op(T_SUB);
             else if (w == VK_ADD) press_op(T_ADD);
             return 0;
+        case WM_DPICHANGED: {
+            g_s = LOWORD(w) / 96.0f;
+            RECT *nr = (RECT *)l;
+            SetWindowPos(h, NULL, nr->left, nr->top,
+                         nr->right - nr->left, nr->bottom - nr->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            set_rgn(h);
+            make_fonts();
+            InvalidateRect(h, NULL, TRUE);
+            return 0;
+        }
         case WM_DESTROY: PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(h, msg, w, l);
@@ -737,6 +801,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
 
 int WINAPI WinMain(HINSTANCE hi, HINSTANCE p, LPSTR c, int s) {
     (void)p; (void)c;
+    // Per-Monitor V2: receive real pixels instead of OS bitmap-stretching
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    g_s = GetDpiForSystem() / 96.0f;
+    if (g_s <= 0.5f) g_s = 1.0f;
     WNDCLASSW wc = { 0 };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hi;
@@ -745,14 +813,11 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE p, LPSTR c, int s) {
     wc.hbrBackground = NULL;
     RegisterClassW(&wc);
     DWORD style = WS_POPUP | WS_VISIBLE;
-    RECT r = { 0, 0, WIN_W, WIN_H };
-    AdjustWindowRect(&r, style, FALSE);
     HWND h = CreateWindowW(wc.lpszClassName, L"Calculator", style,
-                           CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
+                           CW_USEDEFAULT, CW_USEDEFAULT, S(WIN_W), S(WIN_H),
                            NULL, NULL, hi, NULL);
     // rounded corners like macOS
-    HRGN rgn = CreateRoundRectRgn(0, 0, WIN_W + 1, WIN_H + 1, 20, 20);
-    SetWindowRgn(h, rgn, TRUE);
+    set_rgn(h);
     ShowWindow(h, s);
     MSG m;
     while (GetMessage(&m, NULL, 0, 0)) { TranslateMessage(&m); DispatchMessage(&m); }

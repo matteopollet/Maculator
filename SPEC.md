@@ -17,8 +17,7 @@ Extraite par REA (AX tree, screenshots, scénarios de clics, observe-native-call
 
 ## Couleurs boutons
 
-Faces **plates** (vérifié par profils pixel : pas de dégradé, ±1 de variation).
-Le "glow" perçu = bord anti-aliasé + état pressé.
+Faces **plates** au centre (profils pixel : pas de dégradé interne, ±1).
 
 | Groupe | Face | Glyphe |
 |---|---|---|
@@ -26,9 +25,27 @@ Le "glow" perçu = bord anti-aliasé + état pressé.
 | `⌫`, `AC`, `%` | `#858584` | blanc |
 | `÷`, `×`, `−`, `+`, `=` | `#FF8D00` | blanc |
 
-- Pressé : disque **plus clair** (~+45 % vers blanc) — flash lumineux, pas assombrissement
+### Liquid glass (mesuré sur capture Retina 2×)
+
+L'effet "verre" n'est pas un dégradé de face mais un **éclairage de bord** :
+bande spéculaire ~1 px collée au bord interne du disque, maximale en
+haut-centre, fondue vers les côtés (lobe ~gaussien σ≈45°), + rebond faible en
+bas (σ≈40°). Intensité **additive** (préserve la teinte) :
+
+- chiffre : face `(93,92,92)` → rim haut `~130` (+37), bas `~99` (+6)
+- `C`/top : face `(134,133,133)` → rim haut `~149` (+15)
+- opérateur : face `(255,141,0)` → rim haut `(255,156,0)`, bas `(255,176,0)`
+
+### État pressé (mesuré par CGEvent mouse-down + capture)
+
+- Face éclaircie : chiffre `(93,92,92)` → `(131,128,128)` (~mix 25 % vers blanc)
+- Le disque **grossit** légèrement (~+7 % diamètre) pendant le maintien
+- Restauration au relâchement
+
 - Pastilles trafic : rouge `#FF5F56`, jaune `#FEBC2E`, **3e grise `#585654`** (zoom désactivé, taille fixe)
 - Toolbar top-right : 2 disques `(53,51,51)` ~22 px, centres ~(115,17) et (205,17), icônes claires ~`#DAD9D9` (sidebar + calculatrice)
+- Label dynamique : `AC` uniquement à l'état vierge ; **`C` dès qu'il y a
+  quelque chose à effacer** (saisie, expression ou résultat affiché)
 
 ## Grille
 
@@ -47,7 +64,7 @@ Le "glow" perçu = bord anti-aliasé + état pressé.
 - Opérateurs en chaîne avec **priorité standard** : `2 + 3 × 4 =` → `14`
 - `%` postfixe : seul → ÷100 (`5 %` → `0,05`) ; après `+`/`−` → x % du premier opérande (`200 + 10 %` → `220`) ; après `×`/`÷` → ÷100 (`200 × 10 %` → `20`) ; imbricable
 - `=` : évalue ; l'expression reste en ligne du haut, résultat en dessous. `=` répète la dernière opération sur le résultat (`1+2==` → `5` ; `1÷7==` → `0,02040816…`). Un chiffre après `=` démarre une nouvelle expression.
-- `AC` : 1er appui efface l'entrée courante (`5+9` → `5+`), 2e appui remet à `0`
+- `AC`/`C` : label `C` dès qu'un état existe ; 1er appui efface l'entrée courante (`5+9` → `5+`), puis redevient `AC` ; 2e appui remet à `0`
 - `⌫` : supprime le dernier token (`12+3` → `12+`) ; sur `0` reste `0`
 - `±` : négative l'opérande/résultat courant (`5` → `−5`), marche après `=`
 - `5 ÷ 0` → **"Undefined"** (grand texte clair)

@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 // ---------- geometry & colors (window-relative px) ----------
 #define WIN_W   230
@@ -603,6 +604,49 @@ static void draw_icon(HDC m, int id, int cx, int cy) {
     SelectObject(m, op); DeleteObject(p);
 }
 
+static COLORREF lighten(COLORREF c, int pct) { // pct % toward white
+    return RGB(GetRValue(c) + (255 - GetRValue(c)) * pct / 100,
+               GetGValue(c) + (255 - GetGValue(c)) * pct / 100,
+               GetBValue(c) + (255 - GetBValue(c)) * pct / 100);
+}
+
+// Liquid-glass edge light measured on the real app: a specular band hugging
+// the inside of the disc edge, peaked at top-center, fading toward the sides
+// and into the face, plus a faint rebound at the bottom. Painted directly on
+// the render DIB — an angular gaussian lobe × radial gaussian band.
+static void rim_dib(uint32_t *px, int rw, int rh, int cx, int cy, int rad,
+                    COLORREF face) {
+    (void)face;
+    double sig = rad * 0.022;                  // sub-pixel specular line at edge
+    int band = (int)(sig * 3.0);
+    for (int y = cy - rad - 1; y <= cy + rad + 1; y++) {
+        if (y < 0 || y >= rh) continue;
+        for (int x = cx - rad - 1; x <= cx + rad + 1; x++) {
+            if (x < 0 || x >= rw) continue;
+            double dx = x - cx + 0.5, dy = y - cy + 0.5;
+            double dist = sqrt(dx * dx + dy * dy);
+            double rd = dist - (rad - sig * 0.5);     // peak hugging the edge
+            if (rd > sig * 0.5 || rd < -band) continue;
+            double rg = exp(-(rd * rd) / (2.0 * sig * sig));
+            double ang = atan2(-dy, dx) * 57.29578;   // math deg, top = 90
+            double a = ang - 90.0;                     // top lobe
+            while (a > 180) a -= 360; while (a < -180) a += 360;
+            double wtop = exp(-(a * a) / (2 * 42.0 * 42.0)) * 25;
+            a = ang + 90.0;                            // bottom lobe (270°)
+            while (a > 180) a -= 360; while (a < -180) a += 360;
+            double wbot = exp(-(a * a) / (2 * 38.0 * 38.0)) * 10;
+            double k = (wtop + wbot) * rg;
+            if (k < 0.5) continue;
+            // additive specular: preserves the face hue (no tint shift on orange)
+            uint32_t p = px[y * rw + x];   // 32bpp DIB memory: B,G,R,X
+            int b_ = (p & 0xFF)         + (int)k; if (b_ > 255) b_ = 255;
+            int g_ = ((p >> 8) & 0xFF)  + (int)k; if (g_ > 255) g_ = 255;
+            int r_ = ((p >> 16) & 0xFF) + (int)k; if (r_ > 255) r_ = 255;
+            px[y * rw + x] = (p & 0xFF000000) | (r_ << 16) | (g_ << 8) | b_;
+        }
+    }
+}
+
 // toolbar icons, top-right: sidebar toggle + converter, dark discs + light glyph
 static void draw_toolbar_icon(HDC m, int which, int cx, int cy) {
     COLORREF face = RGB(53, 51, 51), glyph = RGB(218, 217, 217);
@@ -689,28 +733,33 @@ static void draw_all(HDC hdc, RECT rc) {
         int row = i / 4, col = i % 4;
         int x = GRID_X0 + col * GRID_P, y = GRID_Y0 + row * GRID_P;
         COLORREF c = g_btns[i].bg;
+        int gr = 0; // press growth in render px (each side)
         if (g_press == i) {
-            // macOS flashes the disc *lighter* on press — the "glow"
-            int r = GetRValue(c) + (255 - GetRValue(c)) * 45 / 100;
-            int g = GetGValue(c) + (255 - GetGValue(c)) * 45 / 100;
-            int b = GetBValue(c) + (255 - GetBValue(c)) * 45 / 100;
-            c = RGB(r, g, b);
+            // measured on the real app: face jumps ~25% toward white and the
+            // disc grows ~7% while held — the liquid-glass press "pop"
+            c = lighten(c, 25);
+            gr = (int)(BTN_D * g_rsc * 0.035f);
         } else if (g_hover == i) {
-            int r = GetRValue(c) + (255 - GetRValue(c)) / 5;
-            int g = GetGValue(c) + (255 - GetGValue(c)) / 5;
-            int b = GetBValue(c) + (255 - GetBValue(c)) / 5;
-            c = RGB(r, g, b);
+            c = lighten(c, 20);
         }
         HBRUSH b = CreateSolidBrush(c);
         HBRUSH ob = (HBRUSH)SelectObject(m, b);
         HPEN p = (HPEN)SelectObject(m, GetStockObject(NULL_PEN));
-        Ellipse(m, R(x), R(y), R(x + BTN_D), R(y + BTN_D));
+        Ellipse(m, R(x) - gr, R(y) - gr, R(x + BTN_D) + gr, R(y + BTN_D) + gr);
         SelectObject(m, ob); SelectObject(m, p); DeleteObject(b);
+        rim_dib(rbits, rw, rh, R(x + BTN_D / 2), R(y + BTN_D / 2),
+                R(BTN_D / 2) + gr, c);
         RECT tr = { R(x), R(y), R(x + BTN_D), R(y + BTN_D) };
         if (g_btns[i].id == F_BS || g_btns[i].id == F_PM)
             draw_icon(m, g_btns[i].id, R(x + BTN_D / 2), R(y + BTN_D / 2));
-        else
-            DrawTextW(m, g_btns[i].label, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        else {
+            const WCHAR *lab = g_btns[i].label;
+            // real app shows "C" whenever there is state to clear, "AC" only fresh
+            if (g_btns[i].id == F_AC &&
+                (g_typing || g_nexpr > 0 || g_shown_result || g_error))
+                lab = L"C";
+            DrawTextW(m, lab, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
     }
 
     // box-filter downsample ×SS — deterministic AA on every platform

@@ -17,11 +17,18 @@ Extraite par REA (AX tree, screenshots, scénarios de clics, observe-native-call
 
 ## Couleurs boutons
 
+Faces **plates** (vérifié par profils pixel : pas de dégradé, ±1 de variation).
+Le "glow" perçu = bord anti-aliasé + état pressé.
+
 | Groupe | Face | Glyphe |
 |---|---|---|
 | chiffres, `±`, `,` | `#5D5C5C` | blanc |
-| `⌫`, `AC`, `%` | `#858585` | blanc |
-| `÷`, `×`, `−`, `+`, `=` | `#FF9402` | blanc |
+| `⌫`, `AC`, `%` | `#858584` | blanc |
+| `÷`, `×`, `−`, `+`, `=` | `#FF8D00` | blanc |
+
+- Pressé : disque **plus clair** (~+45 % vers blanc) — flash lumineux, pas assombrissement
+- Pastilles trafic : rouge `#FF5F56`, jaune `#FEBC2E`, **3e grise `#585654`** (zoom désactivé, taille fixe)
+- Toolbar top-right : 2 disques `(53,51,51)` ~22 px, centres ~(115,17) et (205,17), icônes claires ~`#DAD9D9` (sidebar + calculatrice)
 
 ## Grille
 

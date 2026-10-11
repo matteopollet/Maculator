@@ -124,7 +124,7 @@ SPEC.md            the measured specification (FR)
 
 - Segoe UI rendering on Windows vs SF Pro on macOS — metrics were matched,
   glyph shapes differ subtly
-- The two toolbar icons (history / converter) and menus are not implemented
+- The toolbar icons (history / converter) are drawn but not functional
 - `⌫` stays visible on `0` — the real app hides it (dynamic grid)
 - Basic mode only — no Scientific/Programmer modes, no unit conversion
 

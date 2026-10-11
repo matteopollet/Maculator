@@ -567,12 +567,14 @@ static int S(int v) { return (int)(v * g_s + 0.5f); }
 static void make_fonts(void) {
     g_rsc = g_s * SS;
     if (g_fntBtn) { DeleteObject(g_fntBtn); DeleteObject(g_fntExpr); DeleteObject(g_fntRes); }
+    // grayscale AA: ClearType's subpixel fringes turn to color noise when the
+    // 4x buffer is downsampled
     g_fntBtn  = CreateFontW(-R(20), 0, 0, 0, FW_REGULAR, 0, 0, 0, DEFAULT_CHARSET,
-                            0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+                            0, 0, ANTIALIASED_QUALITY, 0, L"Segoe UI");
     g_fntExpr = CreateFontW(-R(22), 0, 0, 0, FW_REGULAR, 0, 0, 0, DEFAULT_CHARSET,
-                            0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+                            0, 0, ANTIALIASED_QUALITY, 0, L"Segoe UI");
     g_fntRes  = CreateFontW(-R(31), 0, 0, 0, FW_LIGHT, 0, 0, 0, DEFAULT_CHARSET,
-                            0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI Light");
+                            0, 0, ANTIALIASED_QUALITY, 0, L"Segoe UI Light");
 }
 
 static void set_rgn(HWND h) {
@@ -601,6 +603,32 @@ static void draw_icon(HDC m, int id, int cx, int cy) {
     SelectObject(m, op); DeleteObject(p);
 }
 
+// toolbar icons, top-right: sidebar toggle + converter, dark discs + light glyph
+static void draw_toolbar_icon(HDC m, int which, int cx, int cy) {
+    COLORREF face = RGB(53, 51, 51), glyph = RGB(218, 217, 217);
+    HBRUSH b = CreateSolidBrush(face);
+    HBRUSH ob = (HBRUSH)SelectObject(m, b);
+    HPEN np = (HPEN)SelectObject(m, GetStockObject(NULL_PEN));
+    Ellipse(m, cx - R(11), cy - R(11), cx + R(11), cy + R(11));
+    SelectObject(m, ob); SelectObject(m, np); DeleteObject(b);
+
+    HPEN p = CreatePen(PS_SOLID, R(1) ? R(1) : 1, glyph);
+    HPEN op = (HPEN)SelectObject(m, p);
+    HBRUSH nb = (HBRUSH)SelectObject(m, GetStockObject(NULL_BRUSH));
+    if (which == 0) { // sidebar: rounded square split in two panes
+        RoundRect(m, cx - R(6), cy - R(5), cx + R(6), cy + R(5), R(3), R(3));
+        MoveToEx(m, cx - R(2), cy - R(5), NULL); LineTo(m, cx - R(2), cy + R(5));
+        MoveToEx(m, cx - R(4), cy - R(2), NULL); LineTo(m, cx - R(4), cy + R(2));
+    } else {          // calculator: rounded square, display band + 3x3 pad
+        RoundRect(m, cx - R(4), cy - R(6), cx + R(4), cy + R(6), R(2), R(2));
+        MoveToEx(m, cx - R(4), cy - R(3), NULL); LineTo(m, cx + R(4), cy - R(3));
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                SetPixel(m, cx + R(-2 + c * 2), cy + R(0 + r * 2), glyph);
+    }
+    SelectObject(m, nb); SelectObject(m, op); DeleteObject(p);
+}
+
 static void draw_all(HDC hdc, RECT rc) {
     (void)rc;
     g_rsc = g_s * SS;
@@ -623,8 +651,8 @@ static void draw_all(HDC hdc, RECT rc) {
     RECT all = { 0, 0, rw, rh };
     FillRect(m, &all, bg); DeleteObject(bg);
 
-    // traffic lights
-    const COLORREF tl[3] = { C_RED, C_YELLOW, C_GREEN };
+    // traffic lights — zoom is disabled on the real app (fixed size): gray dot
+    const COLORREF tl[3] = { C_RED, C_YELLOW, RGB(88, 86, 86) };
     for (int i = 0; i < 3; i++) {
         HBRUSH b = CreateSolidBrush(tl[i]);
         HBRUSH ob = (HBRUSH)SelectObject(m, b);
@@ -632,6 +660,8 @@ static void draw_all(HDC hdc, RECT rc) {
         Ellipse(m, R(12 + i * 20), R(10), R(12 + i * 20 + 12), R(22));
         SelectObject(m, ob); SelectObject(m, p); DeleteObject(b);
     }
+    draw_toolbar_icon(m, 0, R(115), R(17));
+    draw_toolbar_icon(m, 1, R(205), R(17));
 
     // display text (right aligned)
     SetBkMode(m, TRANSPARENT);
@@ -660,7 +690,10 @@ static void draw_all(HDC hdc, RECT rc) {
         int x = GRID_X0 + col * GRID_P, y = GRID_Y0 + row * GRID_P;
         COLORREF c = g_btns[i].bg;
         if (g_press == i) {
-            int r = GetRValue(c) * 3 / 4, g = GetGValue(c) * 3 / 4, b = GetBValue(c) * 3 / 4;
+            // macOS flashes the disc *lighter* on press — the "glow"
+            int r = GetRValue(c) + (255 - GetRValue(c)) * 45 / 100;
+            int g = GetGValue(c) + (255 - GetGValue(c)) * 45 / 100;
+            int b = GetBValue(c) + (255 - GetBValue(c)) * 45 / 100;
             c = RGB(r, g, b);
         } else if (g_hover == i) {
             int r = GetRValue(c) + (255 - GetRValue(c)) / 5;

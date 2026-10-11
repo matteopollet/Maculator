@@ -802,9 +802,10 @@ static void draw_all(HDC hdc, RECT rc) {
             draw_icon(m, g_btns[i].id, R(x + BTN_D / 2), R(y + BTN_D / 2));
         else {
             const WCHAR *lab = g_btns[i].label;
-            // real app shows "C" whenever there is state to clear, "AC" only fresh
+            // real app: "C" while an expression is being built, "AC" once a
+            // result (or Undefined) is displayed and at fresh state
             if (g_btns[i].id == F_AC &&
-                (g_typing || g_nexpr > 0 || g_shown_result || g_error))
+                (g_typing || (g_nexpr > 0 && !g_shown_result && !g_error)))
                 lab = L"C";
             DrawTextW(m, lab, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }

@@ -44,8 +44,9 @@ bas (σ≈40°). Intensité **additive** (préserve la teinte) :
 
 - Pastilles trafic : rouge `#FF5F56`, jaune `#FEBC2E`, **3e grise `#585654`** (zoom désactivé, taille fixe)
 - Toolbar top-right : 2 disques `(53,51,51)` ~22 px, centres ~(115,17) et (205,17), icônes claires ~`#DAD9D9` (sidebar + calculatrice)
-- Label dynamique : `AC` uniquement à l'état vierge ; **`C` dès qu'il y a
-  quelque chose à effacer** (saisie, expression ou résultat affiché)
+- Label dynamique : **`C` pendant la construction d'une expression** (saisie
+  ou opérateur committé) ; `AC` à l'état vierge **et après `=`** (résultat ou
+  Undefined affiché)
 
 ## Grille
 
@@ -64,7 +65,7 @@ bas (σ≈40°). Intensité **additive** (préserve la teinte) :
 - Opérateurs en chaîne avec **priorité standard** : `2 + 3 × 4 =` → `14`
 - `%` postfixe : seul → ÷100 (`5 %` → `0,05`) ; après `+`/`−` → x % du premier opérande (`200 + 10 %` → `220`) ; après `×`/`÷` → ÷100 (`200 × 10 %` → `20`) ; imbricable
 - `=` : évalue ; l'expression reste en ligne du haut, résultat en dessous. `=` répète la dernière opération sur le résultat (`1+2==` → `5` ; `1÷7==` → `0,02040816…`). Un chiffre après `=` démarre une nouvelle expression.
-- `AC`/`C` : label `C` dès qu'un état existe ; 1er appui efface l'entrée courante (`5+9` → `5+`), puis redevient `AC` ; 2e appui remet à `0`
+- `AC`/`C` : label `C` pendant la saisie ; 1er appui efface l'entrée courante (`5+9` → `5+`), puis redevient `AC` ; 2e appui remet à `0`. Après `=` (résultat ou Undefined) le label redevient `AC`
 - `⌫` : supprime le dernier token (`12+3` → `12+`) ; sur `0` reste `0`
 - `±` : négative l'opérande/résultat courant (`5` → `−5`), marche après `=`
 - `5 ÷ 0` → **"Undefined"** (grand texte clair)

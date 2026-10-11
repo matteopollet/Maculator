@@ -26,7 +26,7 @@
 #define C_BG     RGB(37, 35, 35)
 #define C_DIGIT  RGB(93, 92, 92)
 #define C_TOP    RGB(133, 133, 133)
-#define C_OP     RGB(255, 148, 2)
+#define C_OP     RGB(255, 141, 0)
 #define C_GLYPH  RGB(250, 250, 250)
 #define C_EXPR   RGB(160, 159, 159)
 #define C_RESULT RGB(228, 227, 227)
@@ -595,11 +595,11 @@ static void draw_icon(HDC m, int id, int cx, int cy) {
         SelectObject(m, ob);
         MoveToEx(m, cx+R(1), cy+R(-3), NULL); LineTo(m, cx+R(7), cy+R(3));
         MoveToEx(m, cx+R(7), cy+R(-3), NULL); LineTo(m, cx+R(1), cy+R(3));
-    } else { // F_PM: "+/−" drawn inline
-        MoveToEx(m, cx+R(-12), cy, NULL); LineTo(m, cx+R(-6), cy);
-        MoveToEx(m, cx+R(-9), cy+R(-3), NULL); LineTo(m, cx+R(-9), cy+R(3));
-        MoveToEx(m, cx+R(-2), cy+R(5), NULL); LineTo(m, cx+R(2), cy+R(-5));
-        MoveToEx(m, cx+R(5), cy, NULL);  LineTo(m, cx+R(11), cy);
+    } else { // F_PM: "+/−" diagonal — plus upper-left, minus lower-right
+        MoveToEx(m, cx+R(-13), cy+R(-6), NULL); LineTo(m, cx+R(-5), cy+R(-6));
+        MoveToEx(m, cx+R(-9), cy+R(-10), NULL); LineTo(m, cx+R(-9), cy+R(-2));
+        MoveToEx(m, cx+R(-2), cy+R(9), NULL);  LineTo(m, cx+R(3), cy+R(-9));
+        MoveToEx(m, cx+R(5), cy+R(6), NULL);   LineTo(m, cx+R(13), cy+R(6));
     }
     SelectObject(m, op); DeleteObject(p);
 }
@@ -617,7 +617,7 @@ static COLORREF lighten(COLORREF c, int pct) { // pct % toward white
 static void rim_dib(uint32_t *px, int rw, int rh, int cx, int cy, int rad,
                     COLORREF face) {
     (void)face;
-    double sig = rad * 0.022;                  // sub-pixel specular line at edge
+    double sig = rad * 0.03;                   // ~1.4px specular band at edge
     int band = (int)(sig * 3.0);
     for (int y = cy - rad - 1; y <= cy + rad + 1; y++) {
         if (y < 0 || y >= rh) continue;
@@ -628,13 +628,13 @@ static void rim_dib(uint32_t *px, int rw, int rh, int cx, int cy, int rad,
             double rd = dist - (rad - sig * 0.5);     // peak hugging the edge
             if (rd > sig * 0.5 || rd < -band) continue;
             double rg = exp(-(rd * rd) / (2.0 * sig * sig));
-            double ang = atan2(-dy, dx) * 57.29578;   // math deg, top = 90
-            double a = ang - 90.0;                     // top lobe
-            while (a > 180) a -= 360; while (a < -180) a += 360;
-            double wtop = exp(-(a * a) / (2 * 42.0 * 42.0)) * 25;
-            a = ang + 90.0;                            // bottom lobe (270°)
-            while (a > 180) a -= 360; while (a < -180) a += 360;
-            double wbot = exp(-(a * a) / (2 * 38.0 * 38.0)) * 10;
+            // lit from above: brightness ~ cos(angle from top)^2.5,
+            // exactly zero at the sides; faint rebound at the bottom
+            double ang = atan2(-dy, dx);
+            double ct = sin(ang);          // cos(angle from top)
+            double cb = -ct;               // cos(angle from bottom)
+            double wtop = ct > 0 ? pow(ct, 2.5) * 26 : 0;
+            double wbot = cb > 0 ? pow(cb, 2.0) * 11 : 0;
             double k = (wtop + wbot) * rg;
             if (k < 0.5) continue;
             // additive specular: preserves the face hue (no tint shift on orange)
@@ -659,10 +659,9 @@ static void draw_toolbar_icon(HDC m, int which, int cx, int cy) {
     HPEN p = CreatePen(PS_SOLID, R(1) ? R(1) : 1, glyph);
     HPEN op = (HPEN)SelectObject(m, p);
     HBRUSH nb = (HBRUSH)SelectObject(m, GetStockObject(NULL_BRUSH));
-    if (which == 0) { // sidebar: rounded square split in two panes
+    if (which == 0) { // sidebar: rounded square, narrow left pane + wide right
         RoundRect(m, cx - R(6), cy - R(5), cx + R(6), cy + R(5), R(3), R(3));
         MoveToEx(m, cx - R(2), cy - R(5), NULL); LineTo(m, cx - R(2), cy + R(5));
-        MoveToEx(m, cx - R(4), cy - R(2), NULL); LineTo(m, cx - R(4), cy + R(2));
     } else {          // calculator: rounded square, display band + 3x3 pad
         RoundRect(m, cx - R(4), cy - R(6), cx + R(4), cy + R(6), R(2), R(2));
         MoveToEx(m, cx - R(4), cy - R(3), NULL); LineTo(m, cx + R(4), cy - R(3));
